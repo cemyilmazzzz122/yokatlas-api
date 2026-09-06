@@ -225,12 +225,6 @@ try {
 }
 ```
 
-## Önemli kısıt — detaylı Atlas verileri yok
-
-> 🛑 **Detaylı atlas verileri (cinsiyet/lise alanı/yerleşen il dağılımı, tercih edilen üniversiteler/programlar, akademisyen ünvan dağılımı, yatay geçiş, mezuniyet yılı dağılımı, KPSS yıllara göre, vb. onlarca alt kategori) bu kütüphanede YOK.**
->
-> Bu, kütüphanenin değil **YÖK Atlas'ın** kararı: sitenin React tabanlı SPA'ya geçişiyle birlikte bu sayfalar tamamen kaldırıldı, frontend bile artık bunları render etmiyor ve geriye parse edilebilecek bir endpoint kalmadı. Şu an sadece resmî JSON API'nin sunduğu **kontenjan/yerleşen, akademik kadro, KPSS, taban puan, başarı sırası** alanlarını (4 yıllık) ve Net Sihirbazı verilerini döner.
-
 ## Geliştirme
 
 ```bash
