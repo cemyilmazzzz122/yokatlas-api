@@ -1,0 +1,40 @@
+{
+  "name": "yokatlas-api-wrapper",
+  "version": "1.0.0",
+  "description": "YÖK Atlas tercih kılavuzu JSON API'si için Node.js sarmalayıcı (unofficial)",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean --shims",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --shims",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "yokatlas",
+    "yok-atlas",
+    "tercih",
+    "tercih-kilavuzu",
+    "universite",
+    "api",
+    "turkish",
+    "turkce"
+  ],
+  "author": "Cem",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.2",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  },
+  "dependencies": {}
+}
