@@ -235,4 +235,131 @@ describe("çevrimdışı analiz yardımcıları", () => {
     expect(result.moreCompetitive).toBe("a");
     expect(result.quotaDiff).toBe(20);
   });
+
+  it("degreeType ve bursTuru filtrelerini doğru ID'lere dönüştürür", async () => {
+    mockFetchSequence([
+      jsonResponse({
+        content: [],
+        totalElements: 0,
+        totalPages: 0,
+        size: 20,
+        number: 0,
+        first: true,
+        last: true,
+        numberOfElements: 0,
+        empty: true,
+      }),
+    ]);
+    await YokAtlas.search({ degreeType: "bachelor", bursTuru: "ucretsiz" });
+    const fetchMock = vi.mocked(fetch);
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(body.filters.birimTuruId).toBe(46);
+    expect(body.filters.bursOraniId).toBe(0);
+  });
+
+  it("hem akıllı filtre hem de ID verildiğinde YokAtlasValidationError fırlatır", async () => {
+    await expect(
+      YokAtlas.search({ universite: "boğaziçi", universiteId: [1] }),
+    ).rejects.toThrow(YokAtlasValidationError);
+  });
+
+  it("allYears ve YokAtlas.getAllYears kronolojik veriyi tam döner", async () => {
+    mockFetchSequence([
+      jsonResponse({
+        content: [makeProgramRow()],
+        totalElements: 1,
+        totalPages: 1,
+        size: 20,
+        number: 0,
+        first: true,
+        last: true,
+        numberOfElements: 1,
+        empty: false,
+      }),
+    ]);
+    const res = await YokAtlas.search();
+    const prog = res.content[0];
+    expect(prog.allYears.length).toBe(4);
+    expect(prog.allYears[0].year).toBe(2025);
+    expect(prog.allYears[1].year).toBe(2024);
+    expect(YokAtlas.getAllYears(prog).length).toBe(4);
+  });
+
+  it("compareNets öğrencinin deneme netlerini hedef programla kıyaslar", () => {
+    const targetNet: any = {
+      kilavuzKodu: 102210277,
+      universiteAdi: "BOĞAZİÇİ",
+      birimAdi: "Bilgisayar",
+      puanTuru: "SAY",
+      yil: 2024,
+      tabanPuan: 545,
+      tytMatNet: 35.0,
+      aytMatNet: 38.0,
+      aytFizNet: 12.0,
+    };
+
+    const userNets = {
+      tytMatNet: 37.5, // +2.5 önde
+      aytMatNet: 35.0, // -3.0 geride
+      aytFizNet: 12.0, // eşit
+    };
+
+    const comp = YokAtlas.compareNets(userNets, targetNet);
+    expect(comp.totalUserNet).toBe(84.5);
+    expect(comp.totalTargetNet).toBe(85.0);
+    expect(comp.totalDiff).toBe(-0.5);
+    expect(comp.aheadLessons).toContain("TYT Matematik");
+    expect(comp.behindLessons).toContain("AYT Matematik");
+  });
+
+  it("checkPrerequisites ÖSYM yasal baraj şartlarını doğru tespit eder", () => {
+    const tipProg: any = { birimAdi: "Tıp Fakültesi", birimGrupAdi: "Tıp" };
+    const mühProg: any = { birimAdi: "Bilgisayar Mühendisliği", birimGrupAdi: "Bilgisayar Mühendisliği" };
+    const isletmeProg: any = { birimAdi: "İşletme", birimGrupAdi: "İşletme" };
+
+    // Tıp barajı: 50.000
+    expect(YokAtlas.checkPrerequisites(tipProg, 40000).eligible).toBe(true);
+    expect(YokAtlas.checkPrerequisites(tipProg, 60000).eligible).toBe(false);
+
+    // Mühendislik barajı: 300.000
+    expect(YokAtlas.checkPrerequisites(mühProg, 250000).eligible).toBe(true);
+    expect(YokAtlas.checkPrerequisites(mühProg, 350000).eligible).toBe(false);
+
+    // İşletme (baraj yok)
+    expect(YokAtlas.checkPrerequisites(isletmeProg, 400000).eligible).toBe(true);
+    expect(YokAtlas.checkPrerequisites(isletmeProg, 400000).category).toBeNull();
+  });
+
+  it("validatePreferenceList tercih listesini analiz eder ve ölü tercihleri tespit eder", () => {
+    const progA: any = {
+      birimAdi: "Hukuk",
+      universiteAdi: "A Üniversitesi",
+      current: { basariSirasi: 50000 },
+      history: [],
+    };
+    const progB: any = {
+      birimAdi: "Bilgisayar Mühendisliği",
+      universiteAdi: "B Üniversitesi",
+      current: { basariSirasi: 5000 }, // çok daha yüksek sıra (daha zor) ama 2. sıraya konmuş
+      history: [],
+    };
+
+    const analysis = YokAtlas.validatePreferenceList([progA, progB], 30000);
+    expect(analysis.totalPreferences).toBe(2);
+    expect(analysis.warnings.some((w) => w.includes("ölü tercih"))).toBe(true);
+  });
+
+  it("ağ hatası olduğunda yerleşik lookup snapshot yedeğini (offline fallback) devreye sokar", async () => {
+    // Fetch network hatası fırlatsın
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("Ağ bağlantısı koptu (offline)");
+      }),
+    );
+    const unis = await YokAtlas.listUniversities();
+    expect(unis.length).toBeGreaterThan(200);
+    const status = YokAtlas.getCacheStatus();
+    expect(status.isOfflineFallback).toBe(true);
+  });
 });

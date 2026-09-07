@@ -1,10 +1,19 @@
 import type {
   AdmissionEstimate,
+  AnalyzedPreferenceItem,
+  BursTuru,
   City,
+  DegreeType,
+  LessonNetDiff,
   LookupCacheStatus,
   Net,
+  NetComparison,
   NetFilters,
   NetSearchOptions,
+  OgrenimTuru,
+  PreferenceInput,
+  PreferenceListAnalysis,
+  PrerequisiteCheck,
   Program,
   ProgramComparison,
   ProgramGroup,
@@ -15,11 +24,14 @@ import type {
   SearchOptions,
   SearchPage,
   University,
+  UserNetScores,
   YearlyStats,
   YokAtlasConfig,
 } from "./types";
 import { YokAtlasAPIError, YokAtlasNotFoundError, YokAtlasRateLimitError, YokAtlasValidationError } from "./errors";
 import { resolveByName } from "./lookup";
+import { BURS_TURU_MAP, DEGREE_TYPE_MAP, NET_DERSLERI, OGRENIM_TURU_MAP, OSYM_BARAJLARI } from "./constants";
+import { LOOKUP_SNAPSHOT } from "./data/snapshot";
 
 const SEARCH_PATH = "/api/tercih-kilavuz/search";
 const UNIVERSITIES_PATH = "/api/tercih-kilavuz/universiteler";
@@ -48,6 +60,7 @@ interface LookupCacheState {
   programGroups: ProgramGroup[];
   cities: City[];
   fetchedAt: number;
+  isOfflineFallback: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -67,6 +80,7 @@ export class YokAtlas {
   private static userAgent = "yokatlas-api-wrapper/1.0 (+https://www.npmjs.com/package/yokatlas-api-wrapper)";
   private static maxRetries = 2;
   private static lookupCacheTtlMs = 3_600_000;
+  private static offlineFallback = true;
 
   private static lookupCache: LookupCacheState | null = null;
 
@@ -85,6 +99,7 @@ export class YokAtlas {
     if (config.userAgent !== undefined) this.userAgent = config.userAgent;
     if (config.maxRetries !== undefined) this.maxRetries = config.maxRetries;
     if (config.lookupCacheTtlMs !== undefined) this.lookupCacheTtlMs = config.lookupCacheTtlMs;
+    if (config.offlineFallback !== undefined) this.offlineFallback = config.offlineFallback;
   }
 
   // ---------------------------------------------------------------------
@@ -94,6 +109,8 @@ export class YokAtlas {
   /** YÖK Atlas tercih kılavuzunda program arar. */
   static async search(filters: SearchFilters = {}, options: SearchOptions = {}): Promise<SearchPage<Program>> {
     const { page = 0, size = 20, sortBy = "basariSirasi", direction = "ASC", smartSearch = true, signal } = options;
+
+    this.validateFilterCollisions(filters);
 
     let resolved = filters;
     if (smartSearch && (filters.universite != null || filters.program != null || filters.il != null)) {
@@ -115,6 +132,8 @@ export class YokAtlas {
   /** Net Sihirbazı'nı sorgular: son yerleşen kişinin TYT/AYT/YDT netleri. */
   static async searchNetler(filters: NetFilters = {}, options: NetSearchOptions = {}): Promise<SearchPage<Net>> {
     const { page = 0, size = 20, smartSearch = true, signal } = options;
+
+    this.validateNetFilterCollisions(filters);
 
     let resolved = filters;
     if (smartSearch && (filters.universite != null || filters.program != null)) {
@@ -245,6 +264,7 @@ export class YokAtlas {
       universiteSayisi: cache?.universities.length ?? 0,
       programGrubuSayisi: cache?.programGroups.length ?? 0,
       ilSayisi: cache?.cities.length ?? 0,
+      isOfflineFallback: cache?.isOfflineFallback ?? false,
     };
   }
 
@@ -450,6 +470,236 @@ export class YokAtlas {
     return `${program.universiteAdi} — ${program.birimAdi} (${program.puanTuru}, ${program.current.year}) | Puan: ${puan} · Sıra: ${sira}`;
   }
 
+  /**
+   * Bir programın tüm yıllara ait verilerini döner.
+   * Listenin ilk elemanı güncel yıldır (current), devamı ise geriye dönük 3 yıldır (history).
+   */
+  static getAllYears(program: Program): YearlyStats[] {
+    return program.allYears ?? [program.current, ...program.history];
+  }
+
+  /**
+   * Kullanıcının TYT/AYT deneme netlerini bir programın Net Sihirbazı (son yerleşen)
+   * verileriyle kıyaslar; ders bazında farkları ve toplam net durumunu analiz eder.
+   */
+  static compareNets(userNets: UserNetScores, targetNet: Net): NetComparison {
+    const lessons: LessonNetDiff[] = [];
+    let totalUserNet = 0;
+    let totalTargetNet = 0;
+    const aheadLessons: string[] = [];
+    const behindLessons: string[] = [];
+
+    for (const def of NET_DERSLERI) {
+      const targetVal = targetNet[def.key as keyof Net] as number | null | undefined;
+      const userVal = userNets[def.key as keyof UserNetScores] as number | null | undefined;
+
+      const hasTarget = targetVal !== null && targetVal !== undefined;
+      const hasUser = userVal !== null && userVal !== undefined;
+
+      if (hasTarget || hasUser) {
+        const target = typeof targetVal === "number" ? targetVal : 0;
+        const user = typeof userVal === "number" ? userVal : 0;
+        const diff = Math.round((user - target) * 100) / 100;
+        totalUserNet += user;
+        totalTargetNet += target;
+
+        let status: LessonNetDiff["status"] = "equal";
+        if (diff > 0) {
+          status = "ahead";
+          aheadLessons.push(def.label);
+        } else if (diff < 0) {
+          status = "behind";
+          behindLessons.push(def.label);
+        }
+
+        lessons.push({
+          lessonKey: def.key,
+          lessonName: def.label,
+          userNet: user,
+          targetNet: target,
+          diff,
+          status,
+        });
+      }
+    }
+
+    const totalDiff = Math.round((totalUserNet - totalTargetNet) * 100) / 100;
+    let summary = "";
+    if (totalDiff > 0) {
+      summary = `Toplamda +${totalDiff} net öndesiniz (${aheadLessons.length} derste daha yüksek).`;
+    } else if (totalDiff < 0) {
+      summary = `Toplamda ${totalDiff} net geridesiniz (${behindLessons.length} derste artış gerekiyor).`;
+    } else {
+      summary = "Net toplamınız hedef programın son yerleşen netleriyle tam olarak başa baş.";
+    }
+
+    return {
+      program: {
+        kilavuzKodu: targetNet.kilavuzKodu,
+        universiteAdi: targetNet.universiteAdi,
+        birimAdi: targetNet.birimAdi,
+        puanTuru: targetNet.puanTuru,
+        yil: targetNet.yil,
+        tabanPuan: targetNet.tabanPuan,
+      },
+      lessons,
+      totalUserNet: Math.round(totalUserNet * 100) / 100,
+      totalTargetNet: Math.round(totalTargetNet * 100) / 100,
+      totalDiff,
+      aheadLessons,
+      behindLessons,
+      summary,
+    };
+  }
+
+  /**
+   * Bir program için ÖSYM yasal başarı sırası baraj şartının (Tıp 50k, Hukuk 125k,
+   * Mühendislik 300k vb.) sağlanıp sağlanmadığını denetler.
+   */
+  static checkPrerequisites(program: Program, basariSirasi: number): PrerequisiteCheck {
+    const name = `${program.birimAdi} ${program.birimGrupAdi ?? ""}`.toLocaleLowerCase("tr-TR");
+    let category: PrerequisiteCheck["category"] = null;
+
+    if (name.includes("diş hekimliği")) {
+      category = "DIS";
+    } else if (name.includes("eczacılık")) {
+      category = "ECZACILIK";
+    } else if (name.includes("tıp") && !name.includes("veteriner") && !name.includes("tıbbi") && !name.includes("biyomedikal")) {
+      category = "TIP";
+    } else if (name.includes("hukuk")) {
+      category = "HUKUK";
+    } else if (name.includes("mimarlık") && !name.includes("iç mimarlık") && !name.includes("peyzaj")) {
+      category = "MIMARLIK";
+    } else if (
+      (name.includes("mühendisliği") || name.includes("mühendislik")) &&
+      !name.includes("ziraat") &&
+      !name.includes("su ürünleri") &&
+      !name.includes("orman") &&
+      !name.includes("ağaç işleri")
+    ) {
+      category = "MUHENDISLIK";
+    } else if (name.includes("öğretmenliği") || name.includes("rehberlik ve psikolojik danışmanlık")) {
+      category = "OGRETMENLIK";
+    }
+
+    if (category) {
+      const baraj = OSYM_BARAJLARI[category];
+      const eligible = basariSirasi <= baraj.barajSira;
+      const margin = basariSirasi - baraj.barajSira;
+      const message = eligible
+        ? `ÖSYM ${baraj.categoryName} başarı sırası baraj şartını (${baraj.barajSira.toLocaleString("tr-TR")}) sağlıyorsunuz (Sıranız: ${basariSirasi.toLocaleString("tr-TR")}).`
+        : `ÖSYM ${baraj.categoryName} için en az ilk ${baraj.barajSira.toLocaleString("tr-TR")} içinde olma şartı aramaktadır. Sıranız (${basariSirasi.toLocaleString("tr-TR")}) bu barajın dışında kaldığı için tercih yapılamaz.`;
+
+      return {
+        program,
+        basariSirasi,
+        category,
+        categoryName: baraj.categoryName,
+        barajSira: baraj.barajSira,
+        eligible,
+        margin,
+        message,
+      };
+    }
+
+    return {
+      program,
+      basariSirasi,
+      category: null,
+      categoryName: null,
+      barajSira: null,
+      eligible: true,
+      margin: null,
+      message: "Bu program için ÖSYM başarı sırası baraj şartı bulunmamaktadır.",
+    };
+  }
+
+  /**
+   * Tercih listesini bütünsel olarak inceler; tercihleri güvenlik seviyelerine göre
+   * (güvenli / ideal / hayal) sınıflandırır, yasal baraj takılmalarını ve olası ölü
+   * tercih sıralama hatalarını tespit eder.
+   */
+  static validatePreferenceList(
+    preferences: (PreferenceInput | Program)[],
+    userRank: number,
+  ): PreferenceListAnalysis {
+    const items: AnalyzedPreferenceItem[] = [];
+    const tierCounts = { guvenli: 0, ideal: 0, hayal: 0, belirsiz: 0 };
+    const warnings: string[] = [];
+
+    preferences.forEach((pref, idx) => {
+      const isInput = typeof pref === "object" && pref !== null && "program" in pref;
+      const program: Program = isInput ? (pref as PreferenceInput).program : (pref as Program);
+      const userOrder = isInput && typeof (pref as PreferenceInput).userOrder === "number"
+        ? (pref as PreferenceInput).userOrder!
+        : idx + 1;
+
+      const estimate = this.estimateAdmission(program, userRank);
+      const prerequisite = this.checkPrerequisites(program, userRank);
+
+      let tier: AnalyzedPreferenceItem["tier"] = "belirsiz";
+      if (estimate.verdict === "kesine yakın") {
+        tier = "güvenli";
+        tierCounts.guvenli++;
+      } else if (estimate.verdict === "olası" || estimate.verdict === "sınırda") {
+        tier = "ideal";
+        tierCounts.ideal++;
+      } else if (estimate.verdict === "zayıf") {
+        tier = "hayal";
+        tierCounts.hayal++;
+      } else {
+        tierCounts.belirsiz++;
+      }
+
+      let warning: string | undefined;
+      if (!prerequisite.eligible) {
+        warning = `Baraj engeli: ${prerequisite.message}`;
+        warnings.push(`${userOrder}. Tercih (${program.universiteAdi} - ${program.birimAdi}): ${prerequisite.message}`);
+      }
+
+      items.push({
+        userOrder,
+        program,
+        tier,
+        estimate,
+        prerequisite,
+        warning,
+      });
+    });
+
+    for (let i = 0; i < items.length - 1; i++) {
+      const curr = items[i];
+      const next = items[i + 1];
+      const currCutoff = curr.program.current.basariSirasi;
+      const nextCutoff = next.program.current.basariSirasi;
+      if (currCutoff !== null && nextCutoff !== null) {
+        if (nextCutoff < currCutoff * 0.7) {
+          warnings.push(
+            `Olası ölü tercih: ${next.userOrder}. tercih (${next.program.birimAdi} - ${nextCutoff.toLocaleString("tr-TR")}) kesme sırası olarak ${curr.userOrder}. tercihten (${curr.program.birimAdi} - ${currCutoff.toLocaleString("tr-TR")}) belirgin şekilde daha yüksek, ancak daha alt sıraya yazılmış.`
+          );
+        }
+      }
+    }
+
+    let overallAdvice = "";
+    if (tierCounts.guvenli === 0) {
+      overallAdvice = "Listenizde 'güvenli' kategorisinde hiç tercih bulunmuyor. Açıkta kalma riskini azaltmak için sıranızın gerisinde birkaç garanti tercih eklemeniz önerilir.";
+    } else if (tierCounts.ideal === 0 && tierCounts.hayal > 0) {
+      overallAdvice = "Listeniz ağırlıklı olarak hayal tercihlerden oluşuyor. Sıranıza yakın 'ideal' tercihler eklemek yerleşme şansınızı dengeler.";
+    } else {
+      overallAdvice = `Listeniz dengeli görünüyor: ${tierCounts.hayal} hayal, ${tierCounts.ideal} ideal, ${tierCounts.guvenli} güvenli tercih bulunuyor.`;
+    }
+
+    return {
+      userRank,
+      totalPreferences: items.length,
+      tierCounts,
+      items,
+      warnings,
+      overallAdvice,
+    };
+  }
+
   // ---------------------------------------------------------------------
   // İç mekanizma — lookup önbelleği
   // ---------------------------------------------------------------------
@@ -462,12 +712,32 @@ export class YokAtlas {
   }
 
   private static async fetchLookups(signal?: AbortSignal): Promise<void> {
-    const [universities, programGroups, cities] = await Promise.all([
-      this.getJson<University[]>(UNIVERSITIES_PATH, signal),
-      this.getJson<ProgramGroup[]>(PROGRAMS_PATH, signal),
-      this.getJson<City[]>(CITIES_PATH, signal),
-    ]);
-    this.lookupCache = { universities, programGroups, cities, fetchedAt: Date.now() };
+    try {
+      const [universities, programGroups, cities] = await Promise.all([
+        this.getJson<University[]>(UNIVERSITIES_PATH, signal),
+        this.getJson<ProgramGroup[]>(PROGRAMS_PATH, signal),
+        this.getJson<City[]>(CITIES_PATH, signal),
+      ]);
+      this.lookupCache = {
+        universities,
+        programGroups,
+        cities,
+        fetchedAt: Date.now(),
+        isOfflineFallback: false,
+      };
+    } catch (err) {
+      if (this.offlineFallback) {
+        this.lookupCache = {
+          universities: LOOKUP_SNAPSHOT.universities,
+          programGroups: LOOKUP_SNAPSHOT.programGroups,
+          cities: LOOKUP_SNAPSHOT.cities,
+          fetchedAt: Date.now(),
+          isOfflineFallback: true,
+        };
+        return;
+      }
+      throw err;
+    }
   }
 
   private static resolveSmartFilters(filters: SearchFilters): SearchFilters {
@@ -523,16 +793,52 @@ export class YokAtlas {
     return upper;
   }
 
+  private static validateFilterCollisions(f: SearchFilters): void {
+    if (f.universite != null && f.universiteId != null && f.universiteId.length > 0) {
+      throw new YokAtlasValidationError("universite (akıllı serbest metin) ile universiteId (sayısal ID) aynı anda verilemez.");
+    }
+    if (f.program != null && f.birimGrupId != null && f.birimGrupId.length > 0) {
+      throw new YokAtlasValidationError("program (akıllı serbest metin) ile birimGrupId (sayısal ID) aynı anda verilemez.");
+    }
+    if (f.il != null && f.ilKodu != null && f.ilKodu.length > 0) {
+      throw new YokAtlasValidationError("il (akıllı serbest metin) ile ilKodu (sayısal ID) aynı anda verilemez.");
+    }
+  }
+
+  private static validateNetFilterCollisions(f: NetFilters): void {
+    if (f.universite != null && f.universiteId != null) {
+      throw new YokAtlasValidationError("universite (akıllı serbest metin) ile universiteId aynı anda verilemez.");
+    }
+    if (f.program != null && f.birimGrupId != null) {
+      throw new YokAtlasValidationError("program (akıllı serbest metin) ile birimGrupId aynı anda verilemez.");
+    }
+  }
+
   private static filtersToPayload(f: SearchFilters): Record<string, unknown> {
+    let birimTuruId = f.birimTuruId ?? null;
+    if (birimTuruId == null && f.degreeType) {
+      birimTuruId = DEGREE_TYPE_MAP[f.degreeType.toLowerCase()] ?? null;
+    }
+
+    let bursOraniId = f.bursOraniId ?? null;
+    if (bursOraniId == null && f.bursTuru) {
+      bursOraniId = BURS_TURU_MAP[f.bursTuru.toLowerCase()] ?? null;
+    }
+
+    let ogrenimTuruId = f.ogrenimTuruId ?? null;
+    if (ogrenimTuruId == null && f.ogrenimTuru) {
+      ogrenimTuruId = OGRENIM_TURU_MAP[f.ogrenimTuru.toLowerCase()] ?? null;
+    }
+
     return {
       puanTuru: this.normalizePuanTuru(f.puanTuru),
       universiteId: f.universiteId ?? [],
       birimGrupId: f.birimGrupId ?? [],
       ilKodu: f.ilKodu ?? [],
-      birimTuruId: f.birimTuruId ?? null,
+      birimTuruId,
       universiteTuru: f.universiteTuru ?? null,
-      bursOraniId: f.bursOraniId ?? null,
-      ogrenimTuruId: f.ogrenimTuruId ?? null,
+      bursOraniId,
+      ogrenimTuruId,
       kilavuzKodu: f.kilavuzKodu ?? null,
       minBasariSirasi: f.minBasariSirasi ?? null,
       maxBasariSirasi: f.maxBasariSirasi ?? null,
@@ -594,6 +900,7 @@ export class YokAtlas {
     const year = this.toNumber(row.yil) ?? 0;
     const current = this.buildYearlyStats(row, "", year);
     const history = [1, 2, 3].map((offset) => this.buildYearlyStats(row, String(offset), year - offset));
+    const allYears = [current, ...history];
 
     return {
       osymKilavuzId: this.toNumber(row.osymKilavuzId),
@@ -642,6 +949,7 @@ export class YokAtlas {
 
       current,
       history,
+      allYears,
     };
   }
 

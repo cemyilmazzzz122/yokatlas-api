@@ -7,6 +7,15 @@ export type UniversiteTuru = "DEVLET" | "VAKIF" | "VAKIF MYO";
 /** Birim (program) türü — LİSANS ya da ÖNLİSANS. API "ÖNLISANS" gönderir, bu kütüphane "ONLISANS" olarak normalize eder. */
 export type BirimTuru = "LISANS" | "ONLISANS";
 
+/** Program seviyesi için kullanıcı dostu tip ("bachelor" | "associate" | "lisans" | "onlisans"). */
+export type DegreeType = "bachelor" | "associate" | "lisans" | "onlisans";
+
+/** Sık kullanılan burs oranı etiketleri. */
+export type BursTuru = "ucretsiz" | "tam" | "%50" | "%25";
+
+/** Sık kullanılan öğrenim türü etiketleri. */
+export type OgrenimTuru = "orgun" | "ikinci" | "uzaktan";
+
 export interface University {
   universiteId: number;
   universiteAdi: string;
@@ -92,6 +101,8 @@ export interface Program {
   current: YearlyStats;
   /** Önceki 3 yıl (yeni → eski). */
   history: YearlyStats[];
+  /** Tüm yılların kronolojik sıralaması: current ilk sırada, ardından geçmiş yıllar [current, ...history]. */
+  allYears: YearlyStats[];
 }
 
 /**
@@ -171,10 +182,16 @@ export interface SearchFilters {
   ilKodu?: number[] | null;
   /** 46 = LİSANS, 47 = ÖNLİSANS. Bkz. {@link BIRIM_TURU}. */
   birimTuruId?: number | null;
+  /** Program seviyesi ('bachelor'/'lisans'=46, 'associate'/'onlisans'=47). `birimTuruId` yerine kullanılabilir. */
+  degreeType?: DegreeType | null;
   universiteTuru?: "DEVLET" | "VAKIF" | null;
   /** 0 = Ücretsiz/Burslu. */
   bursOraniId?: number | null;
+  /** Sık kullanılan burs oranı ('ucretsiz'/'tam'=0, '%50'=50, '%25'=25). `bursOraniId` yerine kullanılabilir. */
+  bursTuru?: BursTuru | null;
   ogrenimTuruId?: number | null;
+  /** Sık kullanılan öğretim türü ('orgun'=1, 'ikinci'=2, 'uzaktan'=3). `ogrenimTuruId` yerine kullanılabilir. */
+  ogrenimTuru?: OgrenimTuru | null;
   kilavuzKodu?: number | null;
   minBasariSirasi?: number | null;
   maxBasariSirasi?: number | null;
@@ -271,6 +288,8 @@ export interface LookupCacheStatus {
   universiteSayisi: number;
   programGrubuSayisi: number;
   ilSayisi: number;
+  /** Önbellek verisinin ağ yerine yerel statik snapshot'tan yüklenip yüklenmediği. */
+  isOfflineFallback?: boolean;
 }
 
 export interface YokAtlasConfig {
@@ -282,4 +301,108 @@ export interface YokAtlasConfig {
   maxRetries?: number;
   /** Üniversite/program/il lookup önbelleğinin ömrü (ms). Varsayılan: 3600000 (1 saat). 0 = sonsuz. */
   lookupCacheTtlMs?: number;
+  /** Ağ hatası durumunda yerel lookup snapshot yedeğinin devreye girip girmeyeceği. Varsayılan: true. */
+  offlineFallback?: boolean;
+}
+
+/** Kullanıcının deneme/sınav netleri. */
+export interface UserNetScores {
+  tytTrkNet?: number | null;
+  tytSosNet?: number | null;
+  tytMatNet?: number | null;
+  tytFenNet?: number | null;
+  aytMatNet?: number | null;
+  aytFizNet?: number | null;
+  aytKimNet?: number | null;
+  aytBioNet?: number | null;
+  aytTdeNet?: number | null;
+  aytTrh1Net?: number | null;
+  aytCog1Net?: number | null;
+  aytTrh2Net?: number | null;
+  aytCog2Net?: number | null;
+  aytFelNet?: number | null;
+  aytDinNet?: number | null;
+  ydtYdilNet?: number | null;
+}
+
+/** Tek bir ders bazında net karşılaştırması. */
+export interface LessonNetDiff {
+  lessonKey: string;
+  lessonName: string;
+  userNet: number;
+  targetNet: number;
+  diff: number;
+  status: "ahead" | "behind" | "equal";
+}
+
+/** Net Sihirbazı kıyaslama raporu. */
+export interface NetComparison {
+  program: {
+    kilavuzKodu: number;
+    universiteAdi: string;
+    birimAdi: string;
+    puanTuru: string;
+    yil: number;
+    tabanPuan: number | null;
+  };
+  lessons: LessonNetDiff[];
+  totalUserNet: number;
+  totalTargetNet: number;
+  totalDiff: number;
+  aheadLessons: string[];
+  behindLessons: string[];
+  summary: string;
+}
+
+/** ÖSYM yasal baraj şartı kategori kodu. */
+export type OsymBarajKategori =
+  | "TIP"
+  | "DIS"
+  | "ECZACILIK"
+  | "HUKUK"
+  | "MIMARLIK"
+  | "MUHENDISLIK"
+  | "OGRETMENLIK";
+
+/** ÖSYM başarı sırası baraj şartı denetimi sonucu. */
+export interface PrerequisiteCheck {
+  program: Program;
+  basariSirasi: number;
+  category: OsymBarajKategori | null;
+  categoryName: string | null;
+  barajSira: number | null;
+  eligible: boolean;
+  margin: number | null;
+  message: string;
+}
+
+/** Tercih listesi analizi için girdi öğesi. */
+export interface PreferenceInput {
+  program: Program;
+  userOrder?: number;
+}
+
+/** İncelenmiş tek bir tercih kaydı. */
+export interface AnalyzedPreferenceItem {
+  userOrder: number;
+  program: Program;
+  tier: "güvenli" | "ideal" | "hayal" | "belirsiz";
+  estimate: AdmissionEstimate;
+  prerequisite: PrerequisiteCheck;
+  warning?: string;
+}
+
+/** 24 tercih listesinin bütünsel değerlendirmesi. */
+export interface PreferenceListAnalysis {
+  userRank: number;
+  totalPreferences: number;
+  tierCounts: {
+    guvenli: number;
+    ideal: number;
+    hayal: number;
+    belirsiz: number;
+  };
+  items: AnalyzedPreferenceItem[];
+  warnings: string[];
+  overallAdvice: string;
 }

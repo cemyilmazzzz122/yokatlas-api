@@ -1,10 +1,14 @@
 {
   "name": "yokatlas-api-wrapper",
-  "version": "1.0.0",
-  "description": "YÖK Atlas tercih kılavuzu JSON API'si için Node.js sarmalayıcı (unofficial)",
+  "version": "1.1.0",
+  "description": "YÖK Atlas tercih kılavuzu JSON API'si için Node.js sarmalayıcı ve MCP sunucusu (unofficial)",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "bin": {
+    "yokatlas": "./dist/cli.js",
+    "yokatlas-mcp": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -16,8 +20,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --clean --shims",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --shims",
+    "build": "tsup src/index.ts src/cli.ts --format cjs,esm --dts --clean --shims",
+    "dev": "tsup src/index.ts src/cli.ts --format cjs,esm --dts --watch --shims",
     "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
@@ -28,6 +32,10 @@
     "tercih-kilavuzu",
     "universite",
     "api",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "cli",
     "turkish",
     "turkce"
   ],
@@ -39,5 +47,7 @@
     "typescript": "^5.4.5",
     "vitest": "^1.6.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  }
 }
