@@ -1,6 +1,6 @@
 {
   "name": "yokatlas-api-wrapper",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "YÖK Atlas tercih kılavuzu JSON API'si için Node.js sarmalayıcı ve MCP sunucusu (unofficial)",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

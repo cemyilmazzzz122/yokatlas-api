@@ -19,7 +19,7 @@ const c = {
 
 function printHelp(): void {
   console.log(`
-${c.bold}${c.cyan}YÖK Atlas API & MCP CLI${c.reset} ${c.dim}(v1.1.0)${c.reset}
+${c.bold}${c.cyan}YÖK Atlas API & MCP CLI${c.reset} ${c.dim}(v1.1.1)${c.reset}
 Türk Yükseköğretim Atlası resmi JSON API istemcisi ve MCP sunucusu.
 
 ${c.bold}KULLANIM:${c.reset}
